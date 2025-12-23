@@ -1,0 +1,211 @@
+import json
+import re
+from typing import List, Dict
+from sentence_transformers import SentenceTransformer
+
+class DocumentIndexer:
+    """Класс для создания индекса документов с эмбеддингами"""
+    
+    def __init__(self, model_name: str = 'paraphrase-multilingual-MiniLM-L12-v2'):
+        """
+        Инициализация индексатора
+        
+        Args:
+            model_name: Название модели для генерации эмбеддингов
+                       (поддерживает русский язык)
+        """
+        print(f"Загрузка модели {model_name}...")
+        self.model = SentenceTransformer(model_name)
+        print("Модель загружена успешно!")
+    
+    def split_text_into_chunks(self, text: str, chunk_size: int = 500, 
+                               overlap: int = 50) -> List[str]:
+        """
+        Разбивает текст на чанки с перекрытием
+        
+        Args:
+            text: Исходный текст
+            chunk_size: Размер чанка в символах
+            overlap: Размер перекрытия между чанками
+            
+        Returns:
+            Список текстовых чанков
+        """
+        # Очистка текста от лишних пробелов
+        text = re.sub(r'\s+', ' ', text).strip()
+        
+        chunks = []
+        start = 0
+        
+        while start < len(text):
+            # Определяем конец чанка
+            end = start + chunk_size
+            
+            # Если это не последний чанк, пытаемся разбить по предложению
+            if end < len(text):
+                # Ищем конец предложения в окне
+                sentence_end = max(
+                    text.rfind('. ', start, end),
+                    text.rfind('! ', start, end),
+                    text.rfind('? ', start, end),
+                    text.rfind('\n', start, end)
+                )
+                
+                if sentence_end != -1:
+                    end = sentence_end + 1
+            
+            chunk = text[start:end].strip()
+            if chunk:
+                chunks.append(chunk)
+            
+            # Сдвигаемся с учетом перекрытия
+            start = end - overlap if end < len(text) else end
+        
+        return chunks
+    
+    def generate_embeddings(self, chunks: List[str]) -> List[List[float]]:
+        """
+        Генерирует эмбеддинги для списка чанков
+        
+        Args:
+            chunks: Список текстовых чанков
+            
+        Returns:
+            Список эмбеддингов (векторов)
+        """
+        print(f"Генерация эмбеддингов для {len(chunks)} чанков...")
+        embeddings = self.model.encode(chunks, show_progress_bar=True)
+        return embeddings.tolist()
+    
+    def create_index(self, text: str, chunk_size: int = 500, 
+                    overlap: int = 50) -> Dict:
+        """
+        Создает полный индекс с чанками и эмбеддингами
+        
+        Args:
+            text: Исходный текст
+            chunk_size: Размер чанка
+            overlap: Размер перекрытия
+            
+        Returns:
+            Словарь с индексом
+        """
+        # Разбивка на чанки
+        print("Разбивка текста на чанки...")
+        chunks = self.split_text_into_chunks(text, chunk_size, overlap)
+        print(f"Создано {len(chunks)} чанков")
+        
+        # Генерация эмбеддингов
+        embeddings = self.generate_embeddings(chunks)
+        
+        # Создание индекса
+        index = {
+            'metadata': {
+                'total_chunks': len(chunks),
+                'chunk_size': chunk_size,
+                'overlap': overlap,
+                'model': self.model.get_sentence_embedding_dimension(),
+                'embedding_dimension': len(embeddings[0]) if embeddings else 0
+            },
+            'documents': [
+                {
+                    'id': i,
+                    'text': chunk,
+                    'embedding': embedding,
+                    'char_start': sum(len(c) for c in chunks[:i]),
+                    'char_end': sum(len(c) for c in chunks[:i+1])
+                }
+                for i, (chunk, embedding) in enumerate(zip(chunks, embeddings))
+            ]
+        }
+        
+        return index
+    
+    def save_index(self, index: Dict, output_path: str):
+        """
+        Сохраняет индекс в JSON файл
+        
+        Args:
+            index: Индекс для сохранения
+            output_path: Путь к выходному файлу
+        """
+        print(f"Сохранение индекса в {output_path}...")
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(index, f, ensure_ascii=False, indent=2)
+        print("Индекс успешно сохранен!")
+    
+    def load_index(self, input_path: str) -> Dict:
+        """
+        Загружает индекс из JSON файла
+        
+        Args:
+            input_path: Путь к файлу с индексом
+            
+        Returns:
+            Загруженный индекс
+        """
+        print(f"Загрузка индекса из {input_path}...")
+        with open(input_path, 'r', encoding='utf-8') as f:
+            index = json.load(f)
+        print("Индекс успешно загружен!")
+        return index
+
+
+def main():
+    """Пример использования"""
+    
+    # Путь к входному текстовому файлу
+    input_file = 'input.txt'
+    output_file = 'document_index.json'
+    
+    # Чтение текста из файла
+    try:
+        with open(input_file, 'r', encoding='utf-8') as f:
+            text = f.read()
+        print(f"Загружено {len(text)} символов из {input_file}")
+    except FileNotFoundError:
+        # Если файла нет, создаем демо-текст
+        print(f"Файл {input_file} не найден. Использую демо-текст.")
+        text = """
+        Искусственный интеллект - это область компьютерных наук, которая занимается 
+        созданием интеллектуальных машин. Эти машины способны выполнять задачи, 
+        которые обычно требуют человеческого интеллекта.
+        
+        Машинное обучение является подмножеством искусственного интеллекта. Оно 
+        фокусируется на разработке алгоритмов, которые позволяют компьютерам учиться 
+        на данных без явного программирования.
+        
+        Глубокое обучение - это специализированная форма машинного обучения, которая 
+        использует нейронные сети с множеством слоев. Эта технология достигла 
+        значительных успехов в области компьютерного зрения и обработки естественного языка.
+        """
+    
+    # Создание индексатора
+    indexer = DocumentIndexer()
+    
+    # Создание индекса
+    index = indexer.create_index(
+        text=text,
+        chunk_size=500,  # Размер чанка в символах
+        overlap=50       # Перекрытие между чанками
+    )
+    
+    # Сохранение индекса
+    indexer.save_index(index, output_file)
+    
+    # Вывод статистики
+    print("\n" + "="*50)
+    print("СТАТИСТИКА ИНДЕКСА")
+    print("="*50)
+    print(f"Всего чанков: {index['metadata']['total_chunks']}")
+    print(f"Размерность эмбеддингов: {index['metadata']['embedding_dimension']}")
+    print(f"Размер чанка: {index['metadata']['chunk_size']} символов")
+    print(f"Перекрытие: {index['metadata']['overlap']} символов")
+    print("\nПример первого чанка:")
+    print(index['documents'][0]['text'][:200] + "...")
+    print(f"\nРазмер эмбеддинга: {len(index['documents'][0]['embedding'])} чисел")
+    print(f"Первые 5 значений: {index['documents'][0]['embedding'][:5]}")
+
+
+if __name__ == "__main__":
+    main()
