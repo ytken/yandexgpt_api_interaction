@@ -120,7 +120,8 @@ class YandexRAGSystem:
                 'text': doc['text'],
                 'similarity': similarity,
                 'char_start': doc['char_start'],
-                'char_end': doc['char_end']
+                'char_end': doc['char_end'],
+                'metadata': {}
             })
         
         # Сортируем по убыванию сходства
